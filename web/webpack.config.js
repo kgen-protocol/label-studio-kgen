@@ -66,8 +66,27 @@ const optimizer = () => {
   }
 
   if (process.env.MODE?.startsWith("standalone")) {
-    result.runtimeChunk = false;
-    result.splitChunks = { cacheGroups: { default: false } };
+    // Keep runtime.js and vendor.js separate, but disable async chunk loading
+    result.runtimeChunk = 'single';
+    result.splitChunks = {
+      cacheGroups: {
+        default: false,
+        // Keep vendor chunk separate
+        commonVendor: {
+          test: /[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|mobx|mobx-react|mobx-react-lite|mobx-state-tree)[\\/]/,
+          name: "vendor",
+          chunks: "all",
+          priority: 10,
+        },
+        // Disable async chunks - only keep initial chunks
+        defaultVendors: {
+          test: /[\\/]node_modules[\\/]/,
+          priority: -10,
+          reuseExistingChunk: true,
+          chunks: 'initial',
+        },
+      },
+    };
   }
 
   return result;
