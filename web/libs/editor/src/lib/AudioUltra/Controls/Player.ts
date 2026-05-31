@@ -51,6 +51,16 @@ export abstract class Player extends Destructable {
   }
 
   setCurrentTime(value: number, notify = false) {
+    // Reject non-finite writes before mutating any state. Multi-audio sync
+    // seek broadcasts can land here with NaN when a peer track's metadata
+    // hasn't loaded (clamp(finite, 0, NaN) → NaN). Allowing the mutation
+    // would persist NaN on `this.time`, then `updateCurrentSourceTime`
+    // would throw on `audio.el.currentTime = NaN`; even if the throw is
+    // caught upstream (Audio model's handleSyncSeek wraps in try/catch),
+    // the corrupted `this.time` poisons every downstream MobX reaction
+    // and crashes the render tree.
+    if (!Number.isFinite(value)) return;
+
     const timeChanged = this.time !== value;
 
     this.time = value;
@@ -147,6 +157,12 @@ export abstract class Player extends Destructable {
   }
 
   seek(time: number) {
+    // Bail out if the peer's duration hasn't resolved yet — clamping against
+    // NaN duration would produce NaN and corrupt `this.time` further down.
+    // The seek is dropped silently so the sync broadcast can re-converge on
+    // a later tick when duration is known.
+    if (!Number.isFinite(time) || !Number.isFinite(this.duration)) return;
+
     const newTime = clamp(time, 0, this.duration);
 
     this.currentTime = newTime;
@@ -157,6 +173,8 @@ export abstract class Player extends Destructable {
   }
 
   seekSilent(time: number) {
+    if (!Number.isFinite(time) || !Number.isFinite(this.duration)) return;
+
     const newTime = clamp(time, 0, this.duration);
 
     this.ended = false;

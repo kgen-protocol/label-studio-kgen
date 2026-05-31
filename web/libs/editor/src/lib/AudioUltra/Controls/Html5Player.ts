@@ -75,7 +75,15 @@ export class Html5Player extends Player {
   protected playAudio(_start?: number, _duration?: number): void {
     if (!this.audio || !this.audio.el) return;
 
-    this.audio.el.currentTime = this.currentTime;
+    // Guard every write to the underlying HTMLMediaElement.currentTime.
+    // `this.currentTime` reads `this.time`, which can drift to NaN through
+    // paths Player.ts can't intercept (e.g. the RAF watch() loop reading
+    // back NaN from a peer that has been mid-flight when sync seek arrived
+    // on a NaN duration). A bare write here throws synchronously inside the
+    // MST sync action and unmounts the React tree.
+    if (Number.isFinite(this.currentTime)) {
+      this.audio.el.currentTime = this.currentTime;
+    }
     this.audio.el.addEventListener("ended", this.handleEnded);
     this.bufferPromise = new Promise((resolve) => {
       this.bufferResolve = resolve;
@@ -92,14 +100,20 @@ export class Html5Player extends Player {
       if (this.audio?.el) {
         // This must not be notifying of this adjustment otherwise it can cause sync issues and near infinite loops
         this.setCurrentTime(time);
-        this.audio.el.currentTime = this.currentTime;
+        if (Number.isFinite(this.currentTime)) {
+          this.audio.el.currentTime = this.currentTime;
+        }
         this.watch();
       }
     });
   }
 
   protected updateCurrentSourceTime(timeChanged: boolean) {
-    if (timeChanged && this.audio?.el) {
+    // Same guard as playAudio — never write a non-finite value to the
+    // underlying media element. Player.setCurrentTime already rejects NaN
+    // for explicit callers; this catches any remaining indirect mutations
+    // of `this.time` (e.g. via the watch loop) that bypass that guard.
+    if (timeChanged && this.audio?.el && Number.isFinite(this.time)) {
       this.audio.el.currentTime = this.time;
     }
   }
