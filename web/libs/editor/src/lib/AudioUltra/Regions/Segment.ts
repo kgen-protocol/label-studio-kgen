@@ -303,7 +303,25 @@ export class Segment extends Events<SegmentEvents> {
       if (freezeStart || freezeEnd) this.switchCursor(CursorSymbol.colResize);
       else this.switchCursor(CursorSymbol.grabbing);
 
-      this.updatePosition(clamp(startTime, 0, duration), clamp(endTime, 0, duration));
+      let clampedStart = clamp(startTime, 0, duration);
+      let clampedEnd = clamp(endTime, 0, duration);
+
+      // Enforce a minimum region width while resizing so an edge can never be
+      // dragged onto (or past) the opposite edge and collapse the region to
+      // zero width. The moving edge is pinned MIN away from the fixed edge.
+      if (isResizing) {
+        const minDur = pixelsToTime(defaults.minRegionWidth, zoomedWidth, duration);
+
+        if (freezeStart) {
+          // Right edge is moving; keep it at least MIN to the right of start.
+          clampedEnd = Math.max(clampedEnd, clampedStart + minDur);
+        } else if (freezeEnd) {
+          // Left edge is moving; keep it at least MIN to the left of end.
+          clampedStart = Math.min(clampedStart, clampedEnd - minDur);
+        }
+      }
+
+      this.updatePosition(clampedStart, clampedEnd);
     }
   };
 
@@ -350,8 +368,10 @@ export class Segment extends Events<SegmentEvents> {
     }
 
     // @todo - this should account for timeline placement and start at the reservedSpace height
+    // Draw the body at least minRegionWidth wide so a very short (or legacy
+    // zero-width) region is always visible and selectable at any zoom level.
     layer.fillStyle = color.clone().translucent(0.77).toString();
-    layer.fillRect(this.xStart, top, this.width, height);
+    layer.fillRect(this.xStart, top, Math.max(this.width, defaults.minRegionWidth), height);
 
     // Render grab lines
     layer.fillStyle = selected ? color.toString() : color.clone().translucent(0.6).toString();
@@ -408,6 +428,15 @@ export class Segment extends Events<SegmentEvents> {
 
     if (newStart > newEnd) {
       [newStart, newEnd] = [newEnd, newStart];
+    }
+
+    // Defensive floor for any non-interactive caller: never let a region be
+    // stored with (near) zero width. Anchor the start and grow the end.
+    const minDur = pixelsToTime(defaults.minRegionWidth, this.visualizer.zoomedWidth, this.duration);
+
+    if (newEnd - newStart < minDur) {
+      newEnd = clamp(newStart + minDur, 0, this.duration);
+      newStart = clamp(newEnd - minDur, 0, this.duration);
     }
 
     this.start = newStart;

@@ -185,6 +185,7 @@ const AudioView: FC<AudioProps> = observer(
       <div className={cn("audio-tag").toClassName()}>
         {children}
         <div
+          className={cn("audio-tag").elem("waveform").toClassName()}
           ref={(el) => {
             rootRef.current = el;
             item.stageRef.current = el;

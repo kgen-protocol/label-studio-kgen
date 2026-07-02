@@ -483,7 +483,9 @@ export class Regions {
     const x = getCursorPositionX(e, container);
     const y = getCursorPositionY(e, container);
 
-    const xIsInRange = isInRange(x, xStart, xStart + width);
+    // Use at least minRegionWidth as the hit area so short/zero-width regions
+    // remain clickable (and therefore deletable) — mirrors the render floor.
+    const xIsInRange = isInRange(x, xStart, xStart + Math.max(width, defaults.minRegionWidth));
 
     if (!xIsInRange) return false;
 

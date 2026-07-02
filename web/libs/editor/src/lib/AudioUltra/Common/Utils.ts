@@ -8,6 +8,10 @@ const TIME_TOLERANCE = 0.000001;
 export enum defaults {
   timelineHeight = 32,
   timelinePlacement = "top",
+  // Minimum on-screen width (px) a region may occupy. Used to (a) block a
+  // resize from collapsing a region to zero width and (b) guarantee every
+  // region stays visible and clickable even when fully zoomed in.
+  minRegionWidth = 5,
 }
 
 type LogLevel = "log" | "warn" | "error" | "info";
