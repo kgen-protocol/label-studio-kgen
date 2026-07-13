@@ -365,7 +365,12 @@ export class Regions {
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
 
-      if (region && region.start === region.end) {
+      // Discard a drawn region shorter than the minimum duration. A stray
+      // click, or a tiny drag while zoomed in (where 5px is sub-millisecond),
+      // otherwise yields a near-zero region that fires regionCreated, becomes a
+      // persisted result and trips auto-QC's TimestampValidation. Duration
+      // check (not `start === end`) so near-zero draws are caught at any zoom.
+      if (region && region.end - region.start < defaults.minRegionDuration) {
         region.remove();
         this.unlock();
       } else if (region) {

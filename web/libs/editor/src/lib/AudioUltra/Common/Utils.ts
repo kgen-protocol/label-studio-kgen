@@ -12,6 +12,13 @@ export enum defaults {
   // resize from collapsing a region to zero width and (b) guarantee every
   // region stays visible and clickable even when fully zoomed in.
   minRegionWidth = 5,
+  // Minimum region duration (seconds), zoom-independent. minRegionWidth is a
+  // pixel floor — at high zoom 5px is sub-millisecond, so a drawn/resized
+  // region can still be near-zero in time and trip auto-QC's TimestampValidation
+  // (which requires end > start) downstream. This time floor is the real data
+  // rule; it mirrors the tool FE's MIN_REGION_WIDTH_S (0.05s). Below this a
+  // drawn region is discarded rather than persisted.
+  minRegionDuration = 0.05,
 }
 
 type LogLevel = "log" | "warn" | "error" | "info";

@@ -572,4 +572,42 @@ describe("Regions", () => {
       expect(visualizer.draw).toHaveBeenCalledWith(true);
     });
   });
+
+  describe("handleDrawRegion (min-duration guard)", () => {
+    // Drives the real mousedown/mousemove/mouseup draw flow. getCursorPositionX
+    // reduces to clientX in jsdom (offsetLeft 0), so with zoomedWidth 800 the
+    // pixel→time factor is duration/800.
+    const draw = (regions: Regions, container: HTMLElement, fromX: number, toX: number) => {
+      container.dispatchEvent(new MouseEvent("mousedown", { clientX: fromX, bubbles: true }));
+      document.dispatchEvent(new MouseEvent("mousemove", { clientX: toX, bubbles: true }));
+      document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    };
+
+    // Removal is event-driven (region.remove() → waveform "regionRemoved"),
+    // and a persisted region is announced via "regionCreated". So the guard's
+    // decision is observable on waveform.invoke, not on regions.list (the mock
+    // waveform never wires the real removal handler).
+    it("discards a drawn region shorter than minRegionDuration (the zoomed-in case)", () => {
+      // duration 0.5s over 800px → a 40px drag is >5px yet only 0.025s (< 0.05).
+      // Pre-fix this shipped as a near-zero region and tripped auto-QC.
+      const visualizer = createMockVisualizer();
+      const waveform = createMockWaveform({ duration: 0.5 });
+      const regions = new Regions({}, waveform as any, visualizer as any);
+
+      draw(regions, visualizer.container, 100, 140);
+
+      expect(waveform.invoke).not.toHaveBeenCalledWith("regionCreated", expect.anything());
+      expect(waveform.invoke).toHaveBeenCalledWith("regionRemoved", expect.anything());
+    });
+
+    it("keeps a drawn region longer than minRegionDuration", () => {
+      const visualizer = createMockVisualizer();
+      const waveform = createMockWaveform({ duration: 10 });
+      const regions = new Regions({}, waveform as any, visualizer as any);
+
+      draw(regions, visualizer.container, 100, 300); // 200px → 2.5s
+
+      expect(waveform.invoke).toHaveBeenCalledWith("regionCreated", expect.anything());
+    });
+  });
 });
