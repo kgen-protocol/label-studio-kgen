@@ -7,6 +7,7 @@ import IsReadyMixin from "../../../mixins/IsReadyMixin";
 import ProcessAttrsMixin from "../../../mixins/ProcessAttrs";
 import { SyncableMixin } from "../../../mixins/Syncable";
 import { AudioRegionModel } from "../../../regions/AudioRegion";
+import { defaults } from "../../../lib/AudioUltra/Common/Utils";
 import { FF_LSDV_E_278, isFF } from "../../../utils/feature-flags";
 import { isDefined } from "../../../utils/utilities";
 import ObjectBase from "../Base";
@@ -365,7 +366,9 @@ export const AudioModel = types.compose(
 
                 const region = r.isRegion ? self.updateRegion(r) : self.addRegion(r);
 
-                self.annotation.selectArea(region);
+                // addRegion returns undefined when it drops a near-zero-duration
+                // region (see guard below); don't try to select a phantom area.
+                if (region) self.annotation.selectArea(region);
               }
 
               if (selectedRegions.length) {
@@ -474,6 +477,17 @@ export const AudioModel = types.compose(
             find_r.setWSRegion(wsRegion);
             find_r.updateColor();
             return find_r;
+          }
+
+          // Never persist a near-zero-duration region. A stray click or a tiny
+          // drag while zoomed in can produce a ws region whose end ≈ start;
+          // turning it into a result trips auto-QC's TimestampValidation (which
+          // requires end > start) and blocks submission in the tool FE. Drop the
+          // ws region instead of creating a result. Loaded regions (find_r
+          // above) are exempt — this only guards interactive creation.
+          if (wsRegion.end - wsRegion.start < defaults.minRegionDuration) {
+            wsRegion.remove?.();
+            return;
           }
 
           const states = self.getAvailableStates();

@@ -310,7 +310,14 @@ export class Segment extends Events<SegmentEvents> {
       // dragged onto (or past) the opposite edge and collapse the region to
       // zero width. The moving edge is pinned MIN away from the fixed edge.
       if (isResizing) {
-        const minDur = pixelsToTime(defaults.minRegionWidth, zoomedWidth, duration);
+        // Pin to whichever is larger: the pixel floor (visibility) or the time
+        // floor (data validity). At high zoom the pixel floor is sub-millisecond,
+        // so without minRegionDuration a resize could still collapse a region
+        // below auto-QC's minimum.
+        const minDur = Math.max(
+          pixelsToTime(defaults.minRegionWidth, zoomedWidth, duration),
+          defaults.minRegionDuration,
+        );
 
         if (freezeStart) {
           // Right edge is moving; keep it at least MIN to the right of start.
