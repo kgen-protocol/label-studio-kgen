@@ -18,7 +18,12 @@ interface WaveformAudioEvents {
   canplay: () => void;
   resetSource: () => void;
   waiting: () => void;
+  /** All reset attempts were exhausted and the source could not be recovered. */
+  unrecoverable: (error: MediaError | null) => void;
 }
+
+const MAX_RESET_ATTEMPTS = 3;
+const RESET_RETRY_DELAY_MS = 1500;
 
 export class WaveformAudio extends Events<WaveformAudioEvents> {
   decoder?: BaseAudioDecoder;
@@ -37,6 +42,8 @@ export class WaveformAudio extends Events<WaveformAudioEvents> {
   private mediaResolve?: () => void;
   private hasLoadedSource = false;
   private _durationOverride?: number; // Used when decoder is "none"
+  private resetAttempts = 0;
+  private resetRetryTimeoutId?: ReturnType<typeof setTimeout>;
 
   constructor(options: WaveformAudioOptions) {
     super();
@@ -93,6 +100,7 @@ export class WaveformAudio extends Events<WaveformAudioEvents> {
   destroy() {
     super.destroy();
     this.disconnect();
+    clearTimeout(this.resetRetryTimeoutId);
 
     delete this.mediaResolve;
     delete this.mediaReject;
@@ -194,12 +202,25 @@ export class WaveformAudio extends Events<WaveformAudioEvents> {
   }
 
   mediaError = () => {
-    // If this source has already loaded, we will retry the source url
-    if (this.hasLoadedSource && this.el) {
+    // If this source has already loaded once, a mid-session network blip is
+    // the most likely cause (dropped connection, expired signed URL, brief
+    // CORS failure) rather than a genuinely broken file, so it's worth
+    // retrying a few times with a short wait between attempts — a single
+    // blind retry gives up before the network has any chance to recover.
+    if (this.hasLoadedSource && this.el && this.resetAttempts < MAX_RESET_ATTEMPTS) {
       this.hasLoadedSource = false;
-      this.invoke("resetSource");
+      this.resetAttempts += 1;
+
+      clearTimeout(this.resetRetryTimeoutId);
+      this.resetRetryTimeoutId = setTimeout(() => {
+        this.invoke("resetSource");
+      }, RESET_RETRY_DELAY_MS * this.resetAttempts);
     } else {
-      // otherwise it's an unrecoverable error
+      // Either it never loaded successfully in the first place, or every
+      // retry has failed — surface this so the app can show the user
+      // something instead of leaving a dead player that looks normal but
+      // silently ignores every seek/play.
+      this.invoke("unrecoverable", [this.el?.error ?? null]);
       this.mediaReject?.(this.el?.error);
     }
   };
@@ -220,6 +241,7 @@ export class WaveformAudio extends Events<WaveformAudioEvents> {
     }
 
     this.hasLoadedSource = true;
+    this.resetAttempts = 0;
     this.invoke("canplay");
   };
 

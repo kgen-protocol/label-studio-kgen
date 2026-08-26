@@ -2,6 +2,33 @@ import type { WaveformAudio } from "../Media/WaveformAudio";
 import { Player } from "./Player";
 import { ff } from "@humansignal/core";
 
+const RESET_RESUME_TIMEOUT_MS = 5000;
+
+/**
+ * Waits for a reloaded element to actually become playable again, instead of
+ * assuming `load()` succeeded. Resolves `false` on error/timeout so the
+ * caller doesn't try to resume playback against a still-broken source.
+ */
+function waitForCanPlay(el: HTMLMediaElement, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      el.removeEventListener("canplaythrough", onCanPlay);
+      el.removeEventListener("error", onError);
+      resolve(result);
+    };
+    const onCanPlay = () => finish(true);
+    const onError = () => finish(false);
+    const timeoutId = setTimeout(() => finish(false), timeoutMs);
+
+    el.addEventListener("canplaythrough", onCanPlay);
+    el.addEventListener("error", onError);
+  });
+}
+
 export class Html5Player extends Player {
   mute() {
     super.mute();
@@ -91,21 +118,37 @@ export class Html5Player extends Player {
 
     const time = this.currentTime;
 
-    Promise.all([this.audio.el.play(), this.bufferPromise]).then(() => {
-      this.timestamp = performance.now();
+    Promise.all([this.audio.el.play(), this.bufferPromise])
+      .then(() => {
+        this.timestamp = performance.now();
 
-      // We need to compensate for the time it took to load the buffer
-      // otherwise the audio will be out of sync of the timer we use to
-      // render updates
-      if (this.audio?.el) {
-        // This must not be notifying of this adjustment otherwise it can cause sync issues and near infinite loops
-        this.setCurrentTime(time);
-        if (Number.isFinite(this.currentTime)) {
-          this.audio.el.currentTime = this.currentTime;
+        // We need to compensate for the time it took to load the buffer
+        // otherwise the audio will be out of sync of the timer we use to
+        // render updates
+        if (this.audio?.el) {
+          // This must not be notifying of this adjustment otherwise it can cause sync issues and near infinite loops
+          this.setCurrentTime(time);
+          if (Number.isFinite(this.currentTime)) {
+            this.audio.el.currentTime = this.currentTime;
+          }
+          this.watch();
         }
-        this.watch();
-      }
-    });
+      })
+      .catch(() => {
+        // `audio.el.play()` can reject (autoplay-gesture policy, or
+        // "AbortError: play() request was interrupted") without this ever
+        // resolving. `playSource()` already set `this.playing = true`
+        // optimistically before this call, so leaving it unhandled wedges
+        // the player forever: `Player.play()`'s own guard blocks every
+        // future call while `this.playing` stays stuck true, even though
+        // nothing is actually playing.
+        if (this.isDestroyed) return;
+
+        this.audio?.el?.removeEventListener("ended", this.handleEnded);
+        this.stopWatch();
+        this.playing = false;
+        this.wf.invoke("pause");
+      });
   }
 
   protected updateCurrentSourceTime(timeChanged: boolean) {
@@ -137,7 +180,22 @@ export class Html5Player extends Player {
 
     this.stop();
     // We don't need to load the audio when the feature flag is active
-    if (!ff.isActive(ff.FF_SYNCED_BUFFERING)) this.audio.el.load();
+    if (!ff.isActive(ff.FF_SYNCED_BUFFERING)) {
+      const el = this.audio.el;
+
+      el.load();
+
+      if (wasPlaying) {
+        // Confirm the reload actually worked before resuming. Calling
+        // play() right after load() targets an element that just dropped
+        // back to HAVE_NOTHING — it can't tell us whether the retry
+        // succeeded, and doing it blindly is what left playback silently
+        // dead after a failed retry instead of trying again.
+        const recovered = await waitForCanPlay(el, RESET_RESUME_TIMEOUT_MS);
+
+        if (!recovered || this.isDestroyed || !this.audio) return;
+      }
+    }
 
     if (wasPlaying) this.play();
   };
