@@ -260,6 +260,17 @@ export class Segment extends Events<SegmentEvents> {
     else this.switchCursor(CursorSymbol.grab);
   };
 
+  // `mouseOver` claims cursor focus (via switchCursor -> cursor.set(symbol, this.layerName)).
+  // Without releasing it here, that claim only gets cleared by a separate,
+  // easily-desynced check in Regions.ts (cursorLockedByPlayhead) — when that
+  // check misses, the cursor and seek-lock stay stuck on this segment forever,
+  // even after the mouse has genuinely left it. Releasing our own claim here
+  // is unconditional and doesn't depend on that external state.
+  private mouseLeave = () => {
+    if (this.isDragging) return;
+    this.switchCursor(CursorSymbol.crosshair, false);
+  };
+
   private handleMouseUp = (e: MouseEvent) => {
     if (this.isDragging) {
       this.switchCursor(CursorSymbol.grab);
@@ -352,6 +363,7 @@ export class Segment extends Events<SegmentEvents> {
     this.layer = this.visualizer.createLayer({ groupName: "regions", name: this.layerName });
     // Handle region resizing
     this.on("mouseOver", this.mouseOver);
+    this.on("mouseLeave", this.mouseLeave);
     this.on("mouseDown", this.mouseDown);
   }
 

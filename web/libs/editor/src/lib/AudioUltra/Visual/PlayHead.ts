@@ -156,7 +156,16 @@ export class Playhead extends Events<PlayheadEvents> {
   }
 
   updatePositionFromTime(time: number, _renderVisible = false, useClamp = true) {
+    // wf.duration reads from the waveform-decode pipeline, a separate audio
+    // instance from the one actually playing (see Player.ts). Under network
+    // stress that pipeline can transiently report 0/NaN while playback is
+    // already running, producing a NaN x that silently drops the playhead
+    // from the canvas until something else forces a reposition. Keep the
+    // last good position instead of jumping to an invalid one.
     const newX = (time / this.wf.duration - this.scroll) * this.fullWidth;
+
+    if (!Number.isFinite(newX)) return;
+
     const x = useClamp ? clamp(newX, 0, this.fullWidth) : newX;
 
     this.setX(x);

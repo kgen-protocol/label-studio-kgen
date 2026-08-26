@@ -1024,7 +1024,11 @@ export class Visualizer extends Events<VisualizerEvents> {
 
   private handlePlaying = (currentTime: number) => {
     if (!this.wf.loaded) return;
-    this.currentTime = currentTime / this.wf.duration;
+    const relativeTime = currentTime / this.wf.duration;
+
+    if (!Number.isFinite(relativeTime)) return;
+
+    this.currentTime = relativeTime;
     this.draw();
   };
 
