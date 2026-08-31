@@ -5,6 +5,7 @@ import { clamp } from "../Common/Utils";
 import type { Waveform } from "../Waveform";
 
 const isSyncedBuffering = ff.isActive(ff.FF_SYNCED_BUFFERING);
+const MAX_BUFFER_WAIT_MS = 8000;
 
 export abstract class Player extends Destructable {
   protected audio?: WaveformAudio;
@@ -255,6 +256,7 @@ export abstract class Player extends Destructable {
   }
 
   updateBufferingTimeoutId: number | null = null;
+  bufferWaitStartedAt: number | null = null;
   updateBuffering() {
     if (this.updateBufferingTimeoutId) {
       clearTimeout(this.updateBufferingTimeoutId);
@@ -272,10 +274,28 @@ export abstract class Player extends Destructable {
     }
 
     if (isBuffering) {
+      this.bufferWaitStartedAt ??= Date.now();
+
+      // A real degraded connection can sit in NETWORK_LOADING indefinitely —
+      // no error event, nothing to catch. Polling forever here means
+      // `bufferResolve` never fires, `Promise.all([el.play(), bufferPromise])`
+      // in Html5Player never resolves, `watch()` never starts, and the user
+      // is left with a play button showing "pause" while nothing plays and
+      // the cursor never moves — silently, with no way to recover. Give up
+      // waiting after a bounded time and let playback proceed with whatever
+      // is buffered; the native "waiting" event will re-enter this loop
+      // (freshly bounded) if it stalls again mid-playback.
+      if (Date.now() - this.bufferWaitStartedAt >= MAX_BUFFER_WAIT_MS) {
+        this.bufferWaitStartedAt = null;
+        this.bufferResolve?.();
+        return;
+      }
+
       this.updateBufferingTimeoutId = setTimeout(() => {
         this.updateBuffering();
       }, 16);
     } else {
+      this.bufferWaitStartedAt = null;
       this.bufferResolve?.();
     }
   }

@@ -3,6 +3,7 @@ import { Player } from "./Player";
 import { ff } from "@humansignal/core";
 
 const RESET_RESUME_TIMEOUT_MS = 5000;
+const PLAY_START_TIMEOUT_MS = 10000;
 
 /**
  * Waits for a reloaded element to actually become playable again, instead of
@@ -118,7 +119,19 @@ export class Html5Player extends Player {
 
     const time = this.currentTime;
 
-    Promise.all([this.audio.el.play(), this.bufferPromise])
+    // Bound the whole start-of-playback wait. `el.play()` and bufferPromise
+    // (resolved by `canplaythrough`/`updateBuffering`) both depend on
+    // network events that a genuinely degraded connection can simply never
+    // fire — no error, nothing to catch, just silence. Without this, that
+    // leaves `playing` stuck true (set optimistically in `playSource()`)
+    // with no audio and no cursor movement, and no way for the user to
+    // recover short of reloading. Time out and fall into the same cleanup
+    // as a rejected `play()` instead.
+    const startTimeout = new Promise((_resolve, reject) => {
+      setTimeout(() => reject(new Error("Playback start timed out")), PLAY_START_TIMEOUT_MS);
+    });
+
+    Promise.race([Promise.all([this.audio.el.play(), this.bufferPromise]), startTimeout])
       .then(() => {
         this.timestamp = performance.now();
 

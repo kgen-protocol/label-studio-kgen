@@ -29,7 +29,14 @@ export class MediaLoader extends Destructable {
   }
 
   get duration() {
-    return this._duration;
+    // Read the underlying audio element live rather than trust the cached
+    // snapshot below: under a slow/degraded connection, `this.audio`'s own
+    // metadata can still be loading at the moment `duration` is first
+    // assigned during `load()`, permanently freezing `_duration` at 0/NaN
+    // even after the element finishes loading moments later. Nothing else
+    // ever re-reads it, so every consumer (playhead position, timeline
+    // ticks) would stay stuck on the bad value for the track's lifetime.
+    return this.audio?.duration ?? this._duration;
   }
 
   set duration(duration: number) {
