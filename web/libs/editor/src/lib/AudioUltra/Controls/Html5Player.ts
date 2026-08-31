@@ -3,7 +3,9 @@ import { Player } from "./Player";
 import { ff } from "@humansignal/core";
 
 const RESET_RESUME_TIMEOUT_MS = 5000;
-const PLAY_START_TIMEOUT_MS = 10000;
+const PLAY_START_TIMEOUT_MS = 500;
+const MAX_PLAY_START_ATTEMPTS = 3;
+const PLAY_RETRY_DELAY_MS = 500;
 
 /**
  * Waits for a reloaded element to actually become playable again, instead of
@@ -103,21 +105,36 @@ export class Html5Player extends Player {
   protected playAudio(_start?: number, _duration?: number): void {
     if (!this.audio || !this.audio.el) return;
 
+    this.attemptPlayback(this.currentTime, 0);
+  }
+
+  /**
+   * Attempts to start playback, and on a genuine stall (no error, no
+   * canplaythrough — a real degraded connection can sit in this state
+   * indefinitely) forces a fresh connection with `el.load()` and retries a
+   * bounded number of times before giving up. Re-calling `play()` alone
+   * does nothing for this case: the element is already trying on the same
+   * stuck request, so nothing changes without abandoning it and starting
+   * over.
+   */
+  private attemptPlayback(time: number, attempt: number) {
+    if (!this.audio || !this.audio.el) return;
+
+    const el = this.audio.el;
+
     // Guard every write to the underlying HTMLMediaElement.currentTime.
     // `this.currentTime` reads `this.time`, which can drift to NaN through
     // paths Player.ts can't intercept (e.g. the RAF watch() loop reading
     // back NaN from a peer that has been mid-flight when sync seek arrived
     // on a NaN duration). A bare write here throws synchronously inside the
     // MST sync action and unmounts the React tree.
-    if (Number.isFinite(this.currentTime)) {
-      this.audio.el.currentTime = this.currentTime;
+    if (Number.isFinite(time)) {
+      el.currentTime = time;
     }
-    this.audio.el.addEventListener("ended", this.handleEnded);
+    el.addEventListener("ended", this.handleEnded);
     this.bufferPromise = new Promise((resolve) => {
       this.bufferResolve = resolve;
     });
-
-    const time = this.currentTime;
 
     // Bound the whole start-of-playback wait. `el.play()` and bufferPromise
     // (resolved by `canplaythrough`/`updateBuffering`) both depend on
@@ -125,13 +142,12 @@ export class Html5Player extends Player {
     // fire — no error, nothing to catch, just silence. Without this, that
     // leaves `playing` stuck true (set optimistically in `playSource()`)
     // with no audio and no cursor movement, and no way for the user to
-    // recover short of reloading. Time out and fall into the same cleanup
-    // as a rejected `play()` instead.
+    // recover short of reloading.
     const startTimeout = new Promise((_resolve, reject) => {
       setTimeout(() => reject(new Error("Playback start timed out")), PLAY_START_TIMEOUT_MS);
     });
 
-    Promise.race([Promise.all([this.audio.el.play(), this.bufferPromise]), startTimeout])
+    Promise.race([Promise.all([el.play(), this.bufferPromise]), startTimeout])
       .then(() => {
         this.timestamp = performance.now();
 
@@ -149,15 +165,29 @@ export class Html5Player extends Player {
       })
       .catch(() => {
         // `audio.el.play()` can reject (autoplay-gesture policy, or
-        // "AbortError: play() request was interrupted") without this ever
-        // resolving. `playSource()` already set `this.playing = true`
-        // optimistically before this call, so leaving it unhandled wedges
-        // the player forever: `Player.play()`'s own guard blocks every
-        // future call while `this.playing` stays stuck true, even though
-        // nothing is actually playing.
+        // "AbortError: play() request was interrupted"), or the timeout
+        // above can fire on a silent stall.
         if (this.isDestroyed) return;
 
-        this.audio?.el?.removeEventListener("ended", this.handleEnded);
+        el.removeEventListener("ended", this.handleEnded);
+
+        if (attempt < MAX_PLAY_START_ATTEMPTS) {
+          // Abandon the stuck request and start a new one — same recovery
+          // shape as handleResetSource's network-error retry, just reached
+          // from a timeout instead of an `error` event.
+          el.load();
+          setTimeout(
+            () => this.attemptPlayback(time, attempt + 1),
+            PLAY_RETRY_DELAY_MS * (attempt + 1),
+          );
+          return;
+        }
+
+        // Every retry failed — give up so the player isn't wedged forever.
+        // `playSource()` already set `this.playing = true` optimistically
+        // before this call, so leaving it unhandled would wedge the player:
+        // `Player.play()`'s own guard blocks every future call while
+        // `this.playing` stays stuck true, even though nothing is playing.
         this.stopWatch();
         this.playing = false;
         this.wf.invoke("pause");
